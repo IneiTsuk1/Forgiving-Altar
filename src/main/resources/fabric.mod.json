@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "id": "forgiving_altar",
+  "version": "${version}",
+  "name": "Forgving_Altar",
+  "description": "",
+  "authors": [],
+  "contact": {},
+  "license": "MIT",
+  "icon": "assets/forgiving_altar/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "client": [
+      "net.IneiTsuki.forgiving_altar.client.Forgiving_altarClient"
+    ],
+    "main": [
+      "net.IneiTsuki.forgiving_altar.Forgiving_altar"
+    ]
+  },
+  "mixins": [
+    "forgiving_altar.mixins.json",
+    {
+      "config": "forgiving_altar.client.mixins.json",
+      "environment": "client"
+    }
+  ],
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric": "*",
+    "minecraft": "${minecraft_version}"
+  }
+}

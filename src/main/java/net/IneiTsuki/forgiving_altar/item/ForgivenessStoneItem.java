@@ -6,4 +6,5 @@ public class ForgivenessStoneItem extends Item {
     public ForgivenessStoneItem(Settings settings) {
         super(settings);
     }
+
 }

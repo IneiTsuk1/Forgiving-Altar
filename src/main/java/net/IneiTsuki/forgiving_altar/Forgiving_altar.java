@@ -1,110 +1,94 @@
 package net.IneiTsuki.forgiving_altar;
 
 import net.IneiTsuki.forgiving_altar.item.ForgivenessStoneItem;
+import net.IneiTsuki.forgiving_altar.item.ModItems;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
-import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
-import net.minecraft.item.Item;
-import net.minecraft.item.ItemGroups;
-import net.minecraft.network.message.FilterMask;
-import net.minecraft.network.message.SignedMessage;
+import net.minecraft.block.Blocks;
+import net.minecraft.item.ItemStack;
 import net.minecraft.particle.ParticleTypes;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.BannedPlayerList;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
-import net.minecraft.sound.SoundEvent;
 import net.minecraft.sound.SoundEvents;
 import net.minecraft.text.Text;
 import net.minecraft.util.ActionResult;
-import net.minecraft.util.Identifier;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.world.World;
+
 import com.mojang.authlib.GameProfile;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.*;
 
 public class Forgiving_altar implements ModInitializer {
+
+    public static final String MOD_ID = "forgiving_altar";
+    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
     private static final Map<UUID, Boolean> waitingForSelection = new HashMap<>();
     private static final Map<UUID, BlockPos> pendingTeleport = new HashMap<>();
 
     @Override
-    @SuppressWarnings("unused")
-    public void onInitialize() {
-        // Register the Forgiveness Stone item
-        Item FORGIVENESS_STONE = new ForgivenessStoneItem(new Item.Settings());
-        Registry.register(Registries.ITEM, Identifier.tryParse("forgiving_altar:forgiveness_stone"), FORGIVENESS_STONE);
-        ItemGroupEvents.modifyEntriesEvent(ItemGroups.FUNCTIONAL).register(entries -> entries.add(FORGIVENESS_STONE));
+    @SuppressWarnings("unused")public void onInitialize() {
+        ModItems.registerModItems();
 
+        // Block interaction callback
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
-            if (player.getMainHandStack().getItem() instanceof ForgivenessStoneItem) {
+            ItemStack heldItem = player.getMainHandStack();
+            if (heldItem.getItem() == ModItems.FORGIVENESS_STONE) {
                 BlockPos pos = hitResult.getBlockPos();
-                if (!waitingForSelection.containsKey(player.getGameProfile().getId())) {
-                    player.sendMessage(Text.literal("§6[Altar] §fYou have begun the Forgiveness Ritual! Type the name of the player to unban."), false);
-                    waitingForSelection.put(player.getGameProfile().getId(), true);
+
+                // Check if the block is part of a valid altar
+                if (isValidAltar(world, pos)) {
+                    if (!waitingForSelection.containsKey(player.getGameProfile().getId())) {
+                        player.sendMessage(Text.literal("§6[Altar] §fYou have begun the Forgiveness Ritual! Type the name of the player to unban."), false);
+                        waitingForSelection.put(player.getGameProfile().getId(), true);
+
+                        if (world instanceof ServerWorld serverWorld) {
+                            spawnGlowingAura(serverWorld, pos);
+                        } else {
+                            // Handle client-side or unexpected cases
+                            System.out.println("The world is not a ServerWorld.");
+                        }
+                    }
+                    return ActionResult.SUCCESS;
+                } else {
+                    player.sendMessage(Text.literal("§c[Altar] §fThis is not a valid altar."), false);
+                    return ActionResult.FAIL;
                 }
-                return ActionResult.SUCCESS;
             }
             return ActionResult.PASS;
         });
 
-        ServerMessageEvents.CHAT_MESSAGE.register((message, sender, params) -> {
+        // Modify the chat message to prevent it from being sent to other players
+        ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, sender, parameters) -> {
             UUID playerId = sender.getGameProfile().getId();
             MinecraftServer server = sender.getServer();
 
             if (waitingForSelection.getOrDefault(playerId, false)) {
-                waitingForSelection.remove(playerId);
-                String playerName = message.getSignedContent();
+                waitingForSelection.remove(playerId); // Exit selection mode
+                String playerName = message.getSignedContent().trim();
                 BlockPos altarPos = sender.getBlockPos();
-
-
 
                 assert server != null;
                 if (unbanPlayer(playerName, server, sender, altarPos)) {
                     sender.sendMessage(Text.literal("§a[Altar] " + playerName + " has been unbanned!"), false);
 
                     // Play the *ding* sound effect
-                    Identifier dingSound = Identifier.tryParse("minecraft:block.note_block.pling");
-                    SoundEvent soundEvent = Registries.SOUND_EVENT.get(dingSound);
-                    if (soundEvent != null) {
-                        sender.getWorld().playSound(null, sender.getX(), sender.getY(), sender.getZ(), SoundEvents.BLOCK_NOTE_BLOCK_PLING, SoundCategory.PLAYERS, 1.0F, 1.0F);
+                    sender.getWorld().playSound(null, sender.getX(), sender.getY(), sender.getZ(),
+                            SoundEvents.BLOCK_NOTE_BLOCK_PLING, SoundCategory.PLAYERS, 1.0F, 1.0F);
 
-                    }
-
-                    // Spawn lightning
+                    // Spawn lightning at the altar
                     ServerWorld world = sender.getServerWorld();
                     if (world != null) {
-                        // Spawn lightning
-                        net.minecraft.entity.LightningEntity lightning = new net.minecraft.entity.LightningEntity(
-                                net.minecraft.entity.EntityType.LIGHTNING_BOLT, world
-                        );
-                        lightning.refreshPositionAfterTeleport(altarPos.getX() + 0.5, altarPos.getY(), altarPos.getZ() + 0.5);
-                        world.spawnEntity(lightning);
-
-                        // Apply screen shake effect (small knockback)
-                        double shakeRadius = 5.0; // Players within 5 blocks will be affected
-                        double shakePower = 0.3;  // Small knockback effect
-
-                        for (ServerPlayerEntity player : world.getPlayers()) {
-                            if (player.squaredDistanceTo(altarPos.getX(), altarPos.getY(), altarPos.getZ()) <= shakeRadius * shakeRadius) {
-                                double dx = player.getX() - altarPos.getX();
-                                double dz = player.getZ() - altarPos.getZ();
-                                double distance = Math.sqrt(dx * dx + dz * dz);
-
-                                if (distance > 0) {
-                                    dx /= distance;
-                                    dz /= distance;
-                                }
-
-                                player.addVelocity(dx * shakePower, 0.1, dz * shakePower); // Apply knockback
-                                player.networkHandler.sendPacket(new net.minecraft.network.packet.s2c.play.EntityVelocityUpdateS2CPacket(player));
-                            }
-                        }
+                        // Enhanced particle effect with bigger range and longer duration
+                        spawnEnhancedParticles(world, altarPos);
                     }
 
                     // Consume the forgiveness stone
@@ -114,9 +98,12 @@ public class Forgiving_altar implements ModInitializer {
                 } else {
                     sender.sendMessage(Text.literal("§c[Altar] No banned player found with the name '" + playerName + "'."), false);
                 }
+                return false; // Prevent the message from being sent to the server chat
             }
+            return true; // Allow the message to be sent to other players if not in selection mode
         });
 
+        // Handle player teleport after they join the server (if they were pending teleport)
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             ServerPlayerEntity player = handler.getPlayer();
             UUID playerUUID = player.getGameProfile().getId();
@@ -131,6 +118,20 @@ public class Forgiving_altar implements ModInitializer {
         });
     }
 
+    // Checks if the altar is correctly built with gold blocks
+    private boolean isValidAltar(World world, BlockPos pos) {
+        BlockPos baseStart = pos.down();
+        for (int x = -1; x <= 1; x++) {
+            for (int z = -1; z <= 1; z++) {
+                if (world.getBlockState(baseStart.add(x, 0, z)).getBlock() != Blocks.GOLD_BLOCK) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    // Unbans a player by their name
     private boolean unbanPlayer(String playerName, MinecraftServer server, ServerPlayerEntity sender, BlockPos altarPos) {
         BannedPlayerList banList = server.getPlayerManager().getUserBanList();
         for (String bannedName : banList.getNames()) {
@@ -148,7 +149,7 @@ public class Forgiving_altar implements ModInitializer {
                             unbannedPlayer.sendMessage(Text.literal("§6[Altar] §fYou have been forgiven and returned!"), false);
                         }
                     } else {
-                        pendingTeleport.put(profile.getId(), altarPos);
+                        pendingTeleport.put(profile.getId(), altarPos); // Queue teleport if player isn't online
                     }
 
                     // Add Ritual Effects
@@ -170,5 +171,16 @@ public class Forgiving_altar implements ModInitializer {
             }
         }
         return false;
+    }
+
+    // Spawn a glowing aura around the altar
+    private void spawnGlowingAura(ServerWorld world, BlockPos pos) {
+        world.spawnParticles(ParticleTypes.GLOW, pos.getX() + 0.5, pos.getY() + 1, pos.getZ() + 0.5, 100, 1, 1, 1, 0.05);
+    }
+
+    // Spawn enhanced particle effects for the unban process
+    private void spawnEnhancedParticles(ServerWorld world, BlockPos altarPos) {
+        world.spawnParticles(ParticleTypes.ENCHANT, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 200, 1, 1, 1, 0.15);
+        world.spawnParticles(ParticleTypes.SMOKE, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 100, 1, 1, 1, 0.05);
     }
 }

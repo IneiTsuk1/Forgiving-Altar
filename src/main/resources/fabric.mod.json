@@ -7,7 +7,6 @@
   "authors": [],
   "contact": {},
   "license": "MIT",
-  "icon": "assets/forgiving_altar/icon.png",
   "environment": "*",
   "entrypoints": {
     "client": [

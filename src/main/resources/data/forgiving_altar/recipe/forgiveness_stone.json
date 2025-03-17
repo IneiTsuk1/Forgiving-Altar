@@ -1,0 +1,32 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "key": {
+    "E": {
+      "item": "minecraft:echo_shard"
+    },
+    "D": {
+      "item": "minecraft:diamond"
+    },
+    "S": {
+      "item": "minecraft:nether_star"
+    },
+    "A": {
+      "item": "minecraft:enchanted_golden_apple"
+    },
+    "N": {
+      "item": "minecraft:netherite_ingot"
+    },
+    "#": {
+      "item": "forgiving_altar:soul_shard"
+    }
+  },
+  "pattern": [
+    "DAD",
+    "NSN",
+    "E#E"
+  ],
+  "result": {
+  "count": 1,
+  "id": "forgiving_altar:forgiveness_stone"
+  }
+}

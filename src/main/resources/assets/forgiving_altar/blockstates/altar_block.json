@@ -1,0 +1,7 @@
+{
+  "variants": {
+    "": {
+      "model": "forgiving_altar:block/altar_block"
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "type": "minecraft:crafting_shaped",
+  "key": {
+    "E": {
+      "item": "minecraft:echo_shard"
+    },
+    "#": {
+      "item": "forgiving_altar:soul_shard"
+    },
+    "@": {
+      "item": "minecraft:netherite_block"
+    }
+  },
+  "pattern": [
+    "E#E",
+    "#@#",
+    "E#E"
+  ],
+  "result": {
+    "count": 1,
+    "id": "forgiving_altar:altar_block"
+  }
+}

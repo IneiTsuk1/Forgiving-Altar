@@ -1,5 +1,8 @@
 {
   "item.forgiving_altar.forgiveness_stone": "Forgiveness Stone",
   "item.forgiving_altar.soul_shard": "Soul Shard",
+
+  "block.forgiving_altar.altar_block": "Altar Core",
+
   "message.forgiving_altar.need_stone": "You need a Forgiveness Stone to perform the ritual!"
 }

@@ -4,16 +4,22 @@ import net.IneiTsuki.forgiving_altar.block.ModBlocks;
 import net.IneiTsuki.forgiving_altar.item.ForgivenessStoneItem;
 import net.IneiTsuki.forgiving_altar.item.ModItems;
 import net.IneiTsuki.forgiving_altar.util.ModLootTableModifiers;
+import net.IneiTsuki.forgivingmod.command.RegisterCommands;
+import net.IneiTsuki.forgivingmod.config.DeathTracker;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.event.player.UseBlockCallback;
 import net.fabricmc.fabric.api.message.v1.ServerMessageEvents;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
+import net.minecraft.entity.attribute.EntityAttributeInstance;
+import net.minecraft.entity.attribute.EntityAttributes;
 import net.minecraft.item.ItemStack;
 import net.minecraft.particle.ParticleTypes;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.BannedPlayerList;
+import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.sound.SoundCategory;
@@ -38,11 +44,20 @@ public class Forgiving_altar implements ModInitializer {
     private static final Map<UUID, BlockPos> pendingTeleport = new HashMap<>();
 
     @Override
-    @SuppressWarnings("unused")public void onInitialize() {
+    public void onInitialize() {
+        registerItems();
+        registerEvents();
+    }
+
+    //registers custom items/blocks and loot tables
+    private void registerItems() {
         ModItems.registerModItems();
         ModBlocks.registerModBlocks();
         ModLootTableModifiers.modifyLootTables();
+    }
 
+    //registers the hit/message/ and teleport events
+    private void registerEvents() {
         /// Block interaction callback
         UseBlockCallback.EVENT.register((player, world, hand, hitResult) -> {
             ItemStack heldItem = player.getMainHandStack();
@@ -77,24 +92,33 @@ public class Forgiving_altar implements ModInitializer {
         ServerMessageEvents.ALLOW_CHAT_MESSAGE.register((message, sender, parameters) -> {
             UUID playerId = sender.getGameProfile().getId();
             MinecraftServer server = sender.getServer();
+            assert server != null;
+            ServerCommandSource source = server.getCommandSource();
 
             if (waitingForSelection.getOrDefault(playerId, false)) {
                 waitingForSelection.remove(playerId); // Exit selection mode
                 String playerName = message.getSignedContent().trim();
+
+                // Check if the player name is empty
+                if (playerName.isEmpty()) {
+                    sender.sendMessage(Text.literal("§c[Altar] Player name cannot be empty!"), false);
+                    return false; // Prevent the message from being sent to the chat
+                }
+
                 BlockPos altarPos = sender.getBlockPos();
 
-                assert server != null;
-                if (unbanPlayer(playerName, server, sender, altarPos)) {
+                // Attempt to unban with ForgivingMod first, otherwise fallback to normally unban players
+                if (unbanForgivingMod(playerName, source, server, sender, altarPos)) {
+                    System.out.println("Unbanning with ForgivingMod installed!!");
                     sender.sendMessage(Text.literal("§a[Altar] " + playerName + " has been unbanned!"), false);
 
-                    // Play the *ding* sound effect
+                    // Play a sound effect
                     sender.getWorld().playSound(null, sender.getX(), sender.getY(), sender.getZ(),
                             SoundEvents.BLOCK_NOTE_BLOCK_PLING, SoundCategory.PLAYERS, 1.0F, 1.0F);
 
-                    // Spawn lightning at the altar
+                    // Spawn visual effects at the altar
                     ServerWorld world = sender.getServerWorld();
                     if (world != null) {
-                        // Enhanced particle effect with bigger range and longer duration
                         spawnEnhancedParticles(world, altarPos);
                     }
 
@@ -105,9 +129,10 @@ public class Forgiving_altar implements ModInitializer {
                 } else {
                     sender.sendMessage(Text.literal("§c[Altar] No banned player found with the name '" + playerName + "'."), false);
                 }
-                return false; // Prevent the message from being sent to the server chat
+
+                return false; // Prevent the message from being sent to the chat
             }
-            return true; // Allow the message to be sent to other players if not in selection mode
+            return true; // Allow the message to be sent if not in selection mode
         });
 
         // Handle player teleport after they join the server (if they were pending teleport)
@@ -116,14 +141,16 @@ public class Forgiving_altar implements ModInitializer {
             UUID playerUUID = player.getGameProfile().getId();
             if (pendingTeleport.containsKey(playerUUID)) {
                 BlockPos teleportPos = pendingTeleport.remove(playerUUID);
-                ServerWorld world = server.getWorld(World.OVERWORLD);
-                if (world != null) {
-                    player.teleport(world, teleportPos.getX() + 0.5, teleportPos.getY() + 1, teleportPos.getZ() + 0.5, 0, 0);
-                    player.sendMessage(Text.literal("§6[Altar] §fYou have been forgiven and returned!"), false);
+
+                if (teleportPos != null) {
+                    ServerWorld world = server.getWorld(World.OVERWORLD);
+                    if (world != null) {
+                        player.teleport(world, teleportPos.getX() + 0.5, teleportPos.getY() + 1, teleportPos.getZ() + 0.5, 0, 0);
+                        player.sendMessage(Text.literal("§6[Altar] §fYou have been forgiven and returned!"), false);
+                    }
                 }
             }
         });
-
     }
 
     // Checks if the altar is correctly built
@@ -212,45 +239,139 @@ public class Forgiving_altar implements ModInitializer {
     }
 
     // Unbans a player by their name
-    private boolean unbanPlayer(String playerName, MinecraftServer server, ServerPlayerEntity sender, BlockPos altarPos) {
-        BannedPlayerList banList = server.getPlayerManager().getUserBanList();
-        for (String bannedName : banList.getNames()) {
-            if (bannedName.equalsIgnoreCase(playerName)) {
-                Optional<GameProfile> optionalProfile = Objects.requireNonNull(server.getUserCache()).findByName(playerName);
-                if (optionalProfile.isPresent()) {
-                    GameProfile profile = optionalProfile.get();
-                    banList.remove(profile);
-                    ServerPlayerEntity unbannedPlayer = server.getPlayerManager().getPlayer(profile.getId());
+    @SuppressWarnings("unused") boolean unbanPlayer(String playerName, MinecraftServer server, ServerPlayerEntity sender, BlockPos altarPos) {
+        return handleUnbanAndTeleport(playerName, server, sender, altarPos);
+    }
 
-                    if (unbannedPlayer != null) {
-                        ServerWorld world = server.getWorld(World.OVERWORLD);
-                        if (world != null) {
-                            unbannedPlayer.teleport(world, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 0, 0);
-                            unbannedPlayer.sendMessage(Text.literal("§6[Altar] §fYou have been forgiven and returned!"), false);
-                        }
-                    } else {
-                        pendingTeleport.put(profile.getId(), altarPos); // Queue teleport if player isn't online
-                    }
+    @SuppressWarnings("unused") boolean unbanForgivingMod(String playerName, ServerCommandSource source, MinecraftServer server, ServerPlayerEntity sender, BlockPos altarPos) {
+        if (FabricLoader.getInstance().isModLoaded("forgivingmod")) {
+            System.out.println("ForgivingMod is loaded!");
 
-                    // Add Ritual Effects
-                    if (sender.getWorld() instanceof ServerWorld serverWorld) {
-                        serverWorld.spawnParticles(ParticleTypes.ENCHANT, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 50, 0.5, 1, 0.5, 0.1);
-                        serverWorld.spawnParticles(ParticleTypes.SMOKE, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 20, 0.5, 0.5, 0.5, 0.02);
-                    }
-                    sender.getWorld().playSound(null, sender.getX(), sender.getY(), sender.getZ(), SoundEvents.ENTITY_WITHER_AMBIENT, SoundCategory.AMBIENT, 1F, 1F);
+            // First, check if the player is on the ban list
+            BannedPlayerList banList = server.getPlayerManager().getUserBanList();
 
-                    // Random Lore Messages
-                    String[] loreMessages = {
-                            "§5[Altar] Ancient spirits whisper through the void...",
-                            "§5[Altar] A long-forgotten soul stirs from the abyss...",
-                            "§5[Altar] The altar glows as judgment is passed..."
-                    };
-                    sender.sendMessage(Text.literal(loreMessages[new Random().nextInt(loreMessages.length)]), false);
-                    return true;
-                }
+            System.out.println("Looking up player profile for: " + playerName);
+            Optional<GameProfile> optionalProfile = Objects.requireNonNull(server.getUserCache()).findByName(playerName);
+
+            if (optionalProfile.isEmpty()) {
+                System.out.println("User cache is empty or player not found in cache: " + playerName);
+                sender.sendMessage(Text.literal("§c[Altar] No player found with that name in the server."), false);
+                return false;
             }
+
+            GameProfile profile = optionalProfile.get();
+            //check if the profile is in the banned list
+            if (!banList.contains(profile)) {
+                sender.sendMessage(Text.literal("§c[Altar] Player '" + playerName + "' is not banned."), false);
+                return false;  // Player is not on the banned list
+            }
+
+            // Now that we know the player is banned, proceed with the unban logic
+            ServerPlayerEntity unbannedPlayer = server.getPlayerManager().getPlayer(profile.getId());
+
+            // If the player is online, unban and teleport them
+            if (unbannedPlayer != null) {
+
+                //Handles the unbanning of the player
+                handleUnbanAndTeleport(playerName, server, sender, altarPos);
+
+                //Handles the resetting of the health and death count for the player is the ForgivingMod is installed
+                System.out.println("Resetting Health for " + playerName + ".");
+                EntityAttributeInstance healthAttribute = unbannedPlayer.getAttributeInstance(EntityAttributes.GENERIC_MAX_HEALTH);
+                if (healthAttribute != null) {
+                    healthAttribute.setBaseValue(20.0);
+                    unbannedPlayer.setHealth(unbannedPlayer.getMaxHealth());
+                }
+
+                System.out.println("Resetting Deaths for " + playerName + ".");
+                DeathTracker.loadDeathData();
+            } else {
+                // If the player is offline, queue teleportation
+                pendingTeleport.put(profile.getId(), altarPos);
+            }
+        } else {
+            System.out.println("Using built in unbanning system!");
+            return unbanPlayer(playerName, server, sender, altarPos);
         }
-        return false;
+        return false;  // If the "forgiving" mod isn't loaded, return false
+    }
+
+    private boolean handleUnbanAndTeleport(String playerName, MinecraftServer server, ServerPlayerEntity sender, BlockPos altarPos) {
+        BannedPlayerList banList = server.getPlayerManager().getUserBanList();
+        Optional<GameProfile> optionalProfile = Objects.requireNonNull(server.getUserCache()).findByName(playerName);
+
+        if (optionalProfile.isPresent()) {
+            GameProfile profile = optionalProfile.get();
+            banList.remove(profile);  // Unban the player
+            ServerPlayerEntity unbannedPlayer = server.getPlayerManager().getPlayer(profile.getId());
+
+            // If the player is online, teleport them
+            if (unbannedPlayer != null) {
+                ServerWorld world = server.getWorld(World.OVERWORLD);
+                if (world != null) {
+                    unbannedPlayer.teleport(world, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 0, 0);
+                    unbannedPlayer.sendMessage(Text.literal("§6[Altar] §fYou have been forgiven and returned!"), false);
+                } else {
+                    LOGGER.warn("[Forgiving Altar] Attempted to unban '{}', but no matching player found.", playerName);
+                }
+            } else {
+                // Queue the teleport if the player isn't online
+                pendingTeleport.put(profile.getId(), altarPos);
+            }
+
+            // Add Ritual Effects
+            if (sender.getWorld() instanceof ServerWorld serverWorld) {
+                serverWorld.spawnParticles(ParticleTypes.ENCHANT, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 50, 0.5, 1, 0.5, 0.1);
+                serverWorld.spawnParticles(ParticleTypes.SMOKE, altarPos.getX() + 0.5, altarPos.getY() + 1, altarPos.getZ() + 0.5, 20, 0.5, 0.5, 0.5, 0.02);
+            }
+            sender.getWorld().playSound(null, sender.getX(), sender.getY(), sender.getZ(), SoundEvents.ENTITY_WITHER_AMBIENT, SoundCategory.AMBIENT, 1F, 1F);
+
+            // Random Lore Messages
+            String[] loreMessages = {
+                    "§5[Altar] Ancient spirits whisper through the void...",
+                    "§5[Altar] A long-forgotten soul stirs from the abyss...",
+                    "§5[Altar] The altar glows as judgment is passed..."
+            };
+            sender.sendMessage(Text.literal(loreMessages[new Random().nextInt(loreMessages.length)]), false);
+            return true;
+        }
+        return false;  // Player not found
+    }
+
+    @SuppressWarnings("unused") void handleResettingData(String playerName, MinecraftServer server, ServerPlayerEntity sender, BlockPos altarPos) {
+
+        // First, check if the player is on the ban list
+        BannedPlayerList banList = server.getPlayerManager().getUserBanList();
+
+        System.out.println("Looking up player profile for: " + playerName);
+        Optional<GameProfile> optionalProfile = Objects.requireNonNull(server.getUserCache()).findByName(playerName);
+
+        if (optionalProfile.isEmpty()) {
+            sender.sendMessage(Text.literal("§c[Altar] No player found with that name in the server."), false);
+            return;
+        }
+
+        GameProfile profile = optionalProfile.get();
+        //check if thr profile is in the banned list
+        if (!banList.contains(profile)) {
+            sender.sendMessage(Text.literal("§c[Altar] Player '" + playerName + "' is not banned."), false);
+            return;  // Player is not on the banned list
+        }
+
+        // Now that we know the player is banned, proceed with the unban logic
+        ServerPlayerEntity unbannedPlayer = server.getPlayerManager().getPlayer(profile.getId());
+
+        if (unbannedPlayer != null) {
+            System.out.println("Resetting Health for " + playerName + ".");
+            EntityAttributeInstance healthAttribute = unbannedPlayer.getAttributeInstance(EntityAttributes.GENERIC_MAX_HEALTH);
+            if (healthAttribute != null) {
+                healthAttribute.setBaseValue(20.0);
+                unbannedPlayer.setHealth(unbannedPlayer.getMaxHealth());
+            }
+
+            System.out.println("Resetting Deaths for " + playerName + ".");
+            DeathTracker.loadDeathData();
+        }
     }
 
     // Spawn a glowing aura around the altar
